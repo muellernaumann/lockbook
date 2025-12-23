@@ -101,15 +101,19 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
-    AUFGABE: Trenne TAGEBUCH (Vergangenheit) und BESTELLUNG (Zukunft).
-    SPRACH-LOGIK: Erkenne Sprache, übersetze Inhalte ins DEUTSCHE. Rückfragen in Sprache des Nutzers.
-    VALIDIERUNG: Status 'RUECKFRAGE_NOETIG' wenn Tätigkeit, Zeit oder Materialmenge fehlen.
+    AUFGABE: Erstelle einen präzisen Bau-Bericht.
+    
+    RELEVANZ-REGELN:
+    1. Korrektur-Logik: Wenn der Nutzer sich verbessert ("ich meinte..."), ignoriere den Fehler davor.
+    2. Detail-Pflicht (Sanitär): Bei 'Rohren' MUSS nach dem Durchmesser (z.B. DN50, 15mm) gefragt werden.
+    3. Detail-Pflicht (Bestellung): 'Zwei davon' oder 'ein paar' ist UNGÜLTIG. Setze Status 'RUECKFRAGE_NOETIG'.
+    
     JSON STRUKTUR:
     {{
         "logbuch_eintrag": {{ "taetigkeit": str, "arbeitszeit": float, "material_verbraucht": [] }},
         "material_bestellung": {{ "hat_bestellung": bool, "deadline": str, "items": [] }},
         "status": "OK" | "RUECKFRAGE_NOETIG",
-        "fehlende_infos": "string"
+        "fehlende_infos": "Frage den Nutzer direkt nach dem fehlenden Maß oder der Menge in seiner Sprache."
     }}
     """
     response = client.chat.completions.create(
@@ -164,7 +168,11 @@ if st.session_state.step >= 2 and st.session_state.current_data:
             if log.get("material_verbraucht"):
                 st.write("**Material:**")
                 for mat in log.get("material_verbraucht"):
-                    st.text(f"• {mat['menge']} {mat['einheit']} {mat['artikel']}")
+                    # Nutze .get() mit Fallback, damit es nie wieder crasht
+                    m = mat.get('menge', '?')
+                    e = mat.get('einheit', '')
+                    a = mat.get('artikel', 'Unbekanntes Material')
+                    st.text(f"• {m} {e} {a}")
 
     bestellung = data.get("material_bestellung", {})
     if bestellung.get("hat_bestellung"):

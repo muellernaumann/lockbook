@@ -74,12 +74,17 @@ def analyze_text(text, gewerk_name):
     DEINE AUFGABE (MULTI-INTENT):
     Trenne strikt zwischen TAGEBUCH (Vergangenheit) und BESTELLUNG (Zukunft).
     
+    SPRACH-LOGIK:
+    1. Erkenne die Sprache des Nutzers (z.B. Polnisch, Türkisch, Rumänisch).
+    2. Die Werte im JSON (taetigkeit, artikel) müssen IMMER auf DEUTSCH übersetzt werden.
+    3. Falls Informationen fehlen (status: RUECKFRAGE_NOETIG), schreibe die 'fehlende_infos' UNBEDINGT in der Sprache des Nutzers!
+    
     EXTREM WICHTIG - VALIDIERUNG:
     Du bist ein STRENGER Bauleiter. Du akzeptierst keine unvollständigen Angaben!
     Setze status auf "RUECKFRAGE_NOETIG", wenn:
-    1. TÄTIGKEIT: Wenn nur die Zeit genannt wird, aber nicht WAS gemacht wurde (z.B. "Habe 2 Stunden gebraucht" -> Ungültig! Frage: "Was hast du gemacht?").
-    2. MATERIAL: Wenn der Typ oder die Maße fehlen (z.B. "Brauche Rohre" -> Ungültig! Frage: "Welche Rohre? DN? Material?").
-    3. MENGE: Wenn vage Angaben gemacht werden (z.B. "ein paar", "bisschen" -> Ungültig! Frage: "Wie viele genau?").
+    1. TÄTIGKEIT: Wenn unklar ist, WAS getan wurde.
+    2. MATERIAL: Wenn Typ oder Maße fehlen (z.B. "Brauche Rohre").
+    3. MENGE: Wenn Angaben wie "ein paar" gemacht werden.
     
     JSON STRUKTUR:
     {{
@@ -94,7 +99,7 @@ def analyze_text(text, gewerk_name):
             "items": [ {{ "artikel": "string", "menge": float, "einheit": "string" }} ]
         }},
         "status": "OK" | "RUECKFRAGE_NOETIG" | "IGNORED",
-        "fehlende_infos": "string (Formuliere eine präzise Frage an den Handwerker)"
+        "fehlende_infos": "string (IN DER SPRACHE DES NUTZERS)"
     }}
     """
     
@@ -105,7 +110,6 @@ def analyze_text(text, gewerk_name):
         temperature=0
     )
     return json.loads(response.choices[0].message.content)
-
 def update_entry(altes_json, neue_info):
     # Einfache Update-Logik (Könnte man bei Bedarf noch verfeinern)
     system_prompt_update = "Du bist ein Datenbank-Updater. Integriere die neue Info in das JSON. Setze Status auf OK wenn komplett."

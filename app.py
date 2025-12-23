@@ -197,15 +197,30 @@ if st.session_state.step >= 2 and st.session_state.current_data:
                 st.write(f"**Fällig bis:** {bestellung.get('deadline')}")
             st.dataframe(bestellung.get("items"), hide_index=True)
 
-    # --- 3. Rohdaten & Rückfragen ---
+    # --- 3. Intelligenter Dialog (Audio statt Tippen) ---
     if data.get("status") == "RUECKFRAGE_NOETIG":
-        st.warning(f"⚠️ Rückfrage: {data.get('fehlende_infos')}")
-        antwort = st.chat_input("Antwort eingeben...")
-        if antwort:
-            with st.spinner("Aktualisiere..."):
-                neu_data = update_entry(data, antwort)
-                st.session_state.current_data = neu_data
-                st.rerun()
+        st.divider()
+        
+        # Die Rückfrage prominent anzeigen
+        with st.container(border=True):
+            st.warning(f"⚠️ **KI-Rückfrage:** {data.get('fehlende_infos')}", icon="🤔")
+            
+            st.write("Antworte einfach per Sprache:")
+            
+            # 🎤 ZWEITER Audio-Recorder speziell für die Antwort
+            # WICHTIG: 'key="answer_rec"' ist nötig, damit Streamlit ihn vom ersten Button unterscheidet!
+            audio_antwort = audiorecorder("🎙️ Antwort einsprechen", "⏹️ Absenden", key="answer_rec")
+            
+            if len(audio_antwort) > 0:
+                with st.spinner("Verarbeite Antwort..."):
+                    # 1. Wir nutzen wieder Whisper für die Antwort (selbes Gewerk = gleiches Fachvokabular)
+                    antwort_text = process_audio(audio_antwort.export().read(), selected_gewerk)
+                    st.caption(f"Verstanden: '{antwort_text}'")
+                    
+                    # 2. Update durchführen
+                    neu_data = update_entry(data, antwort_text)
+                    st.session_state.current_data = neu_data
+                    st.rerun() # Seite neu laden mit den kompletten Daten
 
     # --- 4. Speichern ---
     st.divider()

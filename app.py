@@ -1,11 +1,12 @@
 import streamlit as st
 import os
 import json
-import csv
+import gspread
 from datetime import datetime
 from groq import Groq
 from dotenv import load_dotenv
 from audiorecorder import audiorecorder
+from google.oauth2.service_account import Credentials
 
 # 1. Setup
 load_dotenv()
@@ -16,17 +17,15 @@ st.markdown("""
     .stAudioRecorder { transform: scale(2.0); margin: 40px auto; display: flex; justify_content: center; }
     button { height: 3em !important; font-size: 20px !important; }
     div[data-baseweb="select"] { transform: scale(1.05); }
-    /* Warn-Boxen etwas auffälliger machen */
     .stAlert { font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 if not os.getenv("GROQ_API_KEY"):
-    st.error("❌ API Key fehlt! Bitte .env Datei prüfen.")
+    st.error("❌ API Key fehlt! Bitte in den Secrets prüfen.")
     st.stop()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-CSV_DATEI = "baustellentagebuch.csv"
 
 # --- 2. KONFIGURATION: GEWERKE & FACHBEGRIFFE ---
 GEWERKE_KONTEXT = {
@@ -54,6 +53,33 @@ GEWERKE_KONTEXT = {
 
 # --- 3. LOGIK FUNKTIONEN ---
 
+def save_to_google_sheets(daten, gewerk):
+    try:
+        scope = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        gc = gspread.authorize(creds)
+        
+        # Öffnet die Tabelle "Logbook" und das Blatt "Berichte"
+        sheet = gc.open("Logbook").worksheet("Berichte")
+        
+        mat_liste = daten.get('material_verbraucht', [])
+        mat_string = " | ".join([f"{m['menge']} {m['einheit']} {m['artikel']}" for m in mat_liste])
+        
+        zeile = [
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            gewerk,
+            daten.get("taetigkeit", "-"),
+            daten.get("arbeitszeit", 0.0),
+            mat_string,
+            "OK"
+        ]
+        sheet.append_row(zeile)
+        return True
+    except Exception as e:
+        st.error(f"Fehler beim Speichern in Google Sheets: {e}")
+        return False
+
 def process_audio(audio_bytes, gewerk_name):
     keywords = GEWERKE_KONTEXT[gewerk_name]["whisper_keywords"]
     with open("temp_audio.wav", "wb") as f:
@@ -62,7 +88,7 @@ def process_audio(audio_bytes, gewerk_name):
         transcript = client.audio.transcriptions.create(
             model="whisper-large-v3", 
             file=file,
-            prompt=f"Hier ist ein Bericht aus dem Bereich {gewerk_name}. Fachbegriffe: {keywords}. Ganze Sätze."
+            prompt=f"Bericht Bereich {gewerk_name}. Fachbegriffe: {keywords}."
         )
     return transcript.text
 
@@ -70,39 +96,17 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
-    
-    DEINE AUFGABE (MULTI-INTENT):
-    Trenne strikt zwischen TAGEBUCH (Vergangenheit) und BESTELLUNG (Zukunft).
-    
-    SPRACH-LOGIK:
-    1. Erkenne die Sprache des Nutzers (z.B. Polnisch, Türkisch, Rumänisch).
-    2. Die Werte im JSON (taetigkeit, artikel) müssen IMMER auf DEUTSCH übersetzt werden.
-    3. Falls Informationen fehlen (status: RUECKFRAGE_NOETIG), schreibe die 'fehlende_infos' UNBEDINGT in der Sprache des Nutzers!
-    
-    EXTREM WICHTIG - VALIDIERUNG:
-    Du bist ein STRENGER Bauleiter. Du akzeptierst keine unvollständigen Angaben!
-    Setze status auf "RUECKFRAGE_NOETIG", wenn:
-    1. TÄTIGKEIT: Wenn unklar ist, WAS getan wurde.
-    2. MATERIAL: Wenn Typ oder Maße fehlen (z.B. "Brauche Rohre").
-    3. MENGE: Wenn Angaben wie "ein paar" gemacht werden.
-    
+    AUFGABE: Trenne TAGEBUCH (Vergangenheit) und BESTELLUNG (Zukunft).
+    SPRACH-LOGIK: Erkenne Sprache, übersetze Inhalte ins DEUTSCHE. Rückfragen in Sprache des Nutzers.
+    VALIDIERUNG: Status 'RUECKFRAGE_NOETIG' wenn Tätigkeit, Zeit oder Materialmenge fehlen.
     JSON STRUKTUR:
     {{
-        "logbuch_eintrag": {{
-            "taetigkeit": "string (Fachsprache Deutsch)",
-            "arbeitszeit": float,
-            "material_verbraucht": [ {{ "artikel": "string", "menge": float, "einheit": "string" }} ]
-        }},
-        "material_bestellung": {{
-            "hat_bestellung": boolean,
-            "deadline": "string oder null",
-            "items": [ {{ "artikel": "string", "menge": float, "einheit": "string" }} ]
-        }},
-        "status": "OK" | "RUECKFRAGE_NOETIG" | "IGNORED",
-        "fehlende_infos": "string (IN DER SPRACHE DES NUTZERS)"
+        "logbuch_eintrag": {{ "taetigkeit": str, "arbeitszeit": float, "material_verbraucht": [] }},
+        "material_bestellung": {{ "hat_bestellung": bool, "deadline": str, "items": [] }},
+        "status": "OK" | "RUECKFRAGE_NOETIG",
+        "fehlende_infos": "string"
     }}
     """
-    
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
@@ -110,141 +114,77 @@ def analyze_text(text, gewerk_name):
         temperature=0
     )
     return json.loads(response.choices[0].message.content)
+
 def update_entry(altes_json, neue_info):
-    # Einfache Update-Logik (Könnte man bei Bedarf noch verfeinern)
-    system_prompt_update = "Du bist ein Datenbank-Updater. Integriere die neue Info in das JSON. Setze Status auf OK wenn komplett."
-    user_message = f"ALTES JSON: {json.dumps(altes_json)}\nNEUE INFO: {neue_info}"
-    response = client.chat.completions.create(
+    prompt = "Integriere neue Info in das JSON. Status auf OK wenn Infos nun komplett."
+    res = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
-        messages=[{"role": "system", "content": system_prompt_update}, {"role": "user", "content": user_message}],
+        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": f"ALT: {altes_json} NEU: {neue_info}"}],
         temperature=0
     )
-    return json.loads(response.choices[0].message.content)
-
-def save_to_csv(daten, gewerk):
-    # WICHTIG: 'daten' ist hier nur der 'logbuch_eintrag' Teil!
-    datei_existiert = os.path.exists(CSV_DATEI)
-    with open(CSV_DATEI, mode='a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file, delimiter=';')
-        if not datei_existiert:
-            writer.writerow(["Datum", "Gewerk", "Tätigkeit", "Stunden", "Material_Verbrauch", "Status"])
-        
-        # Hier greifen wir auf 'material_verbraucht' zu (neues Schema)
-        mat_liste = daten.get('material_verbraucht', [])
-        # Fallback falls es mal 'material_liste' heißt (Sicherheit)
-        if not mat_liste: 
-            mat_liste = daten.get('material_liste', [])
-
-        mat_string = " | ".join([f"{m['menge']} {m['einheit']} {m['artikel']}" for m in mat_liste])
-        
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d %H:%M"),
-            gewerk,
-            daten.get("taetigkeit", ""),
-            daten.get("arbeitszeit", 0.0),
-            mat_string,
-            "OK"
-        ])
+    return json.loads(res.choices[0].message.content)
 
 # --- 4. APP OBERFLÄCHE ---
 
 st.title("🏗️ Logbook | Smart Bau-Tagebuch")
 
 selected_gewerk = st.selectbox("🔧 Wähle dein Gewerk:", list(GEWERKE_KONTEXT.keys()))
-st.write("Sprich deinen Bericht ein:")
-
-audio = audiorecorder("🎙️ Aufnahme starten", "⏹️ Stop")
 
 if 'step' not in st.session_state:
     st.session_state.step = 1
 if 'current_data' not in st.session_state:
     st.session_state.current_data = None
 
+audio = audiorecorder("🎙️ Aufnahme starten", "⏹️ Stop")
+
 # Audio Verarbeitung
 if len(audio) > 0 and st.session_state.step == 1:
-    st.audio(audio.export().read())
     with st.spinner(f"Verarbeite für {selected_gewerk}..."):
         text = process_audio(audio.export().read(), selected_gewerk)
         st.info(f"📝 Erkannt: {text}")
-        data = analyze_text(text, selected_gewerk)
-        st.session_state.current_data = data
+        st.session_state.current_data = analyze_text(text, selected_gewerk)
         st.session_state.step = 2
 
 # Ergebnis Anzeige
 if st.session_state.step >= 2 and st.session_state.current_data:
     data = st.session_state.current_data
-    
-    # --- 1. Der Tagebuch-Eintrag (Vergangenheit) ---
     log = data.get("logbuch_eintrag", {})
     
     if log:
-        st.subheader("✅ Tagebuch-Eintrag")
-        # Container verhindert das Abschneiden von Text
+        st.subheader("✅ Vorschau Tagebuch")
         with st.container(border=True):
-            c1, c2 = st.columns([3, 1]) 
-            
-            with c1:
-                st.markdown("**Tätigkeit:**")
-                st.write(log.get("taetigkeit", "-")) # st.write bricht Text um -> kein "..." mehr!
-                
-                if log.get("material_verbraucht"):
-                    st.markdown("**Verbrauchtes Material:**")
-                    for mat in log.get("material_verbraucht"):
-                        st.text(f"• {mat['menge']} {mat['einheit']} {mat['artikel']}")
+            st.write(f"**Tätigkeit:** {log.get('taetigkeit', '-')}")
+            st.metric("Zeit", f"{log.get('arbeitszeit', 0)} Std")
+            if log.get("material_verbraucht"):
+                st.write("**Material:**")
+                for mat in log.get("material_verbraucht"):
+                    st.text(f"• {mat['menge']} {mat['einheit']} {mat['artikel']}")
 
-            with c2:
-                # Metrik für Zahlen ist okay
-                st.metric("Zeit", f"{log.get('arbeitszeit', 0)} Std")
-
-    # --- 2. Die Material-Bestellung (Zukunft) ---
     bestellung = data.get("material_bestellung", {})
     if bestellung.get("hat_bestellung"):
         st.divider()
         st.subheader("📦 Bestellung erkannt")
-        with st.warning("Details zur Bestellung", icon="🚛"):
-            if bestellung.get("deadline"):
-                st.write(f"**Fällig bis:** {bestellung.get('deadline')}")
+        with st.warning("Materialliste", icon="🚛"):
             st.dataframe(bestellung.get("items"), hide_index=True)
 
-    # --- 3. Intelligenter Dialog (Audio statt Tippen) ---
     if data.get("status") == "RUECKFRAGE_NOETIG":
         st.divider()
-        
-        # Die Rückfrage prominent anzeigen
-        with st.container(border=True):
-            st.warning(f"⚠️ **KI-Rückfrage:** {data.get('fehlende_infos')}", icon="🤔")
-            
-            st.write("Antworte einfach per Sprache:")
-            
-            # 🎤 ZWEITER Audio-Recorder speziell für die Antwort
-            # WICHTIG: 'key="answer_rec"' ist nötig, damit Streamlit ihn vom ersten Button unterscheidet!
-            audio_antwort = audiorecorder("🎙️ Antwort einsprechen", "⏹️ Absenden", key="answer_rec")
-            
-            if len(audio_antwort) > 0:
-                with st.spinner("Verarbeite Antwort..."):
-                    # 1. Wir nutzen wieder Whisper für die Antwort (selbes Gewerk = gleiches Fachvokabular)
-                    antwort_text = process_audio(audio_antwort.export().read(), selected_gewerk)
-                    st.caption(f"Verstanden: '{antwort_text}'")
-                    
-                    # 2. Update durchführen
-                    neu_data = update_entry(data, antwort_text)
-                    st.session_state.current_data = neu_data
-                    st.rerun() # Seite neu laden mit den kompletten Daten
+        st.warning(f"🤔 **KI-Rückfrage:** {data.get('fehlende_infos')}")
+        audio_antwort = audiorecorder("🎙️ Antwort einsprechen", "⏹️ Absenden", key="answer_rec")
+        if len(audio_antwort) > 0:
+            with st.spinner("Ergänze Daten..."):
+                antwort_text = process_audio(audio_antwort.export().read(), selected_gewerk)
+                st.session_state.current_data = update_entry(data, antwort_text)
+                st.rerun()
 
-    # --- 4. Speichern ---
     st.divider()
-    with st.expander("🔍 Rohe Daten anzeigen (Debug)"):
-        st.json(data)
-
-    col_save, col_reset = st.columns([1, 1])
+    col_save, col_reset = st.columns(2)
     
     with col_save:
-        if data.get("status") == "OK":
-            # Wir übergeben nur 'log' (den Tagebuch-Teil) an die CSV Funktion!
-            if st.button("💾 Tagebuch speichern", type="primary"):
-                save_to_csv(log, selected_gewerk) 
-                st.toast("Eintrag gespeichert!", icon="💾")
+        if st.button("💾 In Google Sheets speichern", type="primary"):
+            if save_to_google_sheets(log, selected_gewerk):
+                st.toast("In Google Sheets gespeichert!", icon="✅")
                 st.session_state.step = 1
                 st.session_state.current_data = None
                 st.rerun()

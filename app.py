@@ -101,26 +101,27 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
-    
-    TASK: Extract data from the construction report.
+    TASK: Extract data into JSON. 
     
     UNIVERSAL LANGUAGE RULES:
-    1. DETECT: Identify the user's input language.
-    2. TRANSLATE: Always output 'taetigkeit' and 'artikel' in GERMAN.
-    3. RESPOND: Always write 'fehlende_infos' in the SAME LANGUAGE the user used. If the user spoke English, ask in English. If Polish, ask in Polish.
+    1. Always translate 'taetigkeit' and 'artikel' into GERMAN.
+    2. Always write 'fehlende_infos' in the SAME LANGUAGE the user used (English, Polish, etc.).
     
     STRICT VALIDATION:
-    - Status 'RUECKFRAGE_NOETIG' if pipes are mentioned without diameter/material.
-    - Status 'RUECKFRAGE_NOETIG' if quantities are vague ("some", "a few").
+    - Status 'RUECKFRAGE_NOETIG' if items like 'pipes' lack diameter/material.
+    - Status 'RUECKFRAGE_NOETIG' if quantities are vague.
     
     JSON STRUCTURE:
     {{
-        "logbuch_eintrag": {{ "taetigkeit": str, "arbeitszeit": float, "material_verbraucht": [] }},
+        "logbuch_eintrag": {{ 
+            "taetigkeit": "string", 
+            "arbeitszeit": float, 
+            "material_verbraucht": [{{ "artikel": str, "menge": float, "einheit": str }}] 
+        }},
         "status": "OK" | "RUECKFRAGE_NOETIG",
-        "fehlende_infos": "Your question in the user's input language"
+        "fehlende_infos": "string in user's language"
     }}
     """
-    
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
@@ -130,14 +131,25 @@ def analyze_text(text, gewerk_name):
     return json.loads(response.choices[0].message.content)
 
 def update_entry(altes_json, neue_info):
-    prompt = "Integriere neue Info in das JSON. Status auf OK wenn Infos nun komplett."
-    res = client.chat.completions.create(
+    system_prompt_update = """
+    ROLE: Data Merger.
+    TASK: Update the OLD JSON with NEW INFO.
+    
+    RULES:
+    1. Keep all existing data from OLD JSON.
+    2. Update specific fields (like diameter or quantity) with the NEW INFO.
+    3. Ensure 'material_verbraucht' is a list of objects with artikel, menge, einheit.
+    4. Set status to 'OK' only if taetigkeit, arbeitszeit, and material details are complete.
+    5. 'fehlende_infos' must be in the language of the NEW INFO.
+    """
+    user_message = f"OLD_JSON: {json.dumps(altes_json)}\nNEW_INPUT: {neue_info}"
+    response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
-        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": f"ALT: {altes_json} NEU: {neue_info}"}],
+        messages=[{"role": "system", "content": system_prompt_update}, {"role": "user", "content": user_message}],
         temperature=0
     )
-    return json.loads(res.choices[0].message.content)
+    return json.loads(response.choices[0].message.content)
 
 # --- 4. APP OBERFLÄCHE ---
 

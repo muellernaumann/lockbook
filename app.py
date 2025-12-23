@@ -101,21 +101,26 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
-    AUFGABE: Erstelle einen präzisen Bau-Bericht.
     
-    RELEVANZ-REGELN:
-    1. Korrektur-Logik: Wenn der Nutzer sich verbessert ("ich meinte..."), ignoriere den Fehler davor.
-    2. Detail-Pflicht (Sanitär): Bei 'Rohren' MUSS nach dem Durchmesser (z.B. DN50, 15mm) gefragt werden.
-    3. Detail-Pflicht (Bestellung): 'Zwei davon' oder 'ein paar' ist UNGÜLTIG. Setze Status 'RUECKFRAGE_NOETIG'.
+    TASK: Extract data from the construction report.
     
-    JSON STRUKTUR:
+    UNIVERSAL LANGUAGE RULES:
+    1. DETECT: Identify the user's input language.
+    2. TRANSLATE: Always output 'taetigkeit' and 'artikel' in GERMAN.
+    3. RESPOND: Always write 'fehlende_infos' in the SAME LANGUAGE the user used. If the user spoke English, ask in English. If Polish, ask in Polish.
+    
+    STRICT VALIDATION:
+    - Status 'RUECKFRAGE_NOETIG' if pipes are mentioned without diameter/material.
+    - Status 'RUECKFRAGE_NOETIG' if quantities are vague ("some", "a few").
+    
+    JSON STRUCTURE:
     {{
         "logbuch_eintrag": {{ "taetigkeit": str, "arbeitszeit": float, "material_verbraucht": [] }},
-        "material_bestellung": {{ "hat_bestellung": bool, "deadline": str, "items": [] }},
         "status": "OK" | "RUECKFRAGE_NOETIG",
-        "fehlende_infos": "Frage den Nutzer direkt nach dem fehlenden Maß oder der Menge in seiner Sprache."
+        "fehlende_infos": "Your question in the user's input language"
     }}
     """
+    
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 

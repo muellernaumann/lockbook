@@ -2,6 +2,5 @@ streamlit
 groq
 python-dotenv
 streamlit-audiorecorder
-pyaudioop
 gspread
 google-auth

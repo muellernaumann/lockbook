@@ -8,10 +8,9 @@ from dotenv import load_dotenv
 from audiorecorder import audiorecorder
 from google.oauth2.service_account import Credentials
 
-# 1. Setup
+# 1. Setup & CSS
 load_dotenv()
 
-# CSS Hack für große Buttons (Handschuh-Modus) & bessere Lesbarkeit
 st.markdown("""
     <style>
     .stAudioRecorder { transform: scale(2.0); margin: 40px auto; display: flex; justify_content: center; }
@@ -28,6 +27,7 @@ if not os.getenv("GROQ_API_KEY"):
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # --- 2. KONFIGURATION: GEWERKE & FACHBEGRIFFE ---
+# Hier sind alle deine Gewerke wieder vollständig enthalten
 GEWERKE_KONTEXT = {
     "Sanitär & Heizung": {
         "whisper_keywords": "Rohre, Muffen, Fittinge, Hanf, Abwasser, HT-Rohr, Kupfer, Siphon, Kessel, Heizkörper, Ventil, Presszange",
@@ -55,21 +55,15 @@ GEWERKE_KONTEXT = {
 
 def save_to_google_sheets(daten, gewerk):
     try:
-        # Erweiteter Scope für Schreibzugriff
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         gc = gspread.authorize(creds)
         
-        # Den Namen der Tabelle exakt so wie im Screenshot (Groß/Kleinschreibung!)
         sheet = gc.open("Logbook").worksheet("Berichte")
                 
         mat_liste = daten.get('material_verbraucht', [])
-        mat_string = " | ".join([f"{m['menge']} {m['einheit']} {m['artikel']}" for m in mat_liste])
+        mat_string = " | ".join([f"{m.get('menge', '')} {m.get('einheit', '')} {m.get('artikel', '')}" for m in mat_liste])
         
         zeile = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -93,7 +87,7 @@ def process_audio(audio_bytes, gewerk_name):
         transcript = client.audio.transcriptions.create(
             model="whisper-large-v3", 
             file=file,
-            prompt=f"Bericht Bereich {gewerk_name}. Fachbegriffe: {keywords}."
+            prompt=f"Bau-Rapport für {gewerk_name}. Fachbegriffe: {keywords}."
         )
     return transcript.text
 
@@ -101,25 +95,22 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
-    TASK: Extract data into JSON. 
+    TASK: Extract data into JSON.
     
     UNIVERSAL LANGUAGE RULES:
-    1. Always translate 'taetigkeit' and 'artikel' into GERMAN.
-    2. Always write 'fehlende_infos' in the SAME LANGUAGE the user used (English, Polish, etc.).
+    1. Translate 'taetigkeit' and 'artikel' into GERMAN.
+    2. Write 'fehlende_infos' in the user's native language.
     
     STRICT VALIDATION:
-    - Status 'RUECKFRAGE_NOETIG' if items like 'pipes' lack diameter/material.
-    - Status 'RUECKFRAGE_NOETIG' if quantities are vague.
+    - Status 'RUECKFRAGE_NOETIG' if pipes lack diameter or quantities are vague.
+    - Always maintain 'material_bestellung' structure.
     
     JSON STRUCTURE:
     {{
-        "logbuch_eintrag": {{ 
-            "taetigkeit": "string", 
-            "arbeitszeit": float, 
-            "material_verbraucht": [{{ "artikel": str, "menge": float, "einheit": str }}] 
-        }},
+        "logbuch_eintrag": {{ "taetigkeit": str, "arbeitszeit": float, "material_verbraucht": [] }},
+        "material_bestellung": {{ "hat_bestellung": bool, "items": [] }},
         "status": "OK" | "RUECKFRAGE_NOETIG",
-        "fehlende_infos": "string in user's language"
+        "fehlende_infos": "str"
     }}
     """
     response = client.chat.completions.create(
@@ -132,18 +123,13 @@ def analyze_text(text, gewerk_name):
 
 def update_entry(altes_json, neue_info):
     system_prompt_update = """
-    ROLE: Precise Construction Data Merger.
-    TASK: Integrate NEW_INPUT into OLD_JSON without losing quantities or dimensions.
-    
-    STRICT RULES:
-    1. QUANTITY PRESERVATION: If OLD_JSON or NEW_INPUT mentions a number (e.g., '6 pieces', '3 meters'), it MUST appear in the 'menge' or 'artikel' field.
-    2. DETAIL MERGING: If the user adds a dimension (e.g., '16 Zoll'), append it to the 'artikel' name (e.g., 'Kupferrohr 16 Zoll').
-    3. NO DATA LOSS: Do not overwrite 6 pieces with 1 piece unless explicitly corrected.
-    4. TRANSLATION: Keep everything in GERMAN for the final JSON values.
+    ROLE: Data Merger.
+    TASK: Integrate NEW_INPUT into OLD_JSON.
+    - KEEP quantities (like '6 pieces') and diameters (like '16 inch').
+    - Translate new terms into GERMAN.
+    - Ensure 'material_bestellung' is not lost.
     """
-    
-    user_message = f"OLD_JSON: {json.dumps(altes_json)}\nNEW_INPUT: {neue_info}"
-    
+    user_message = f"OLD: {json.dumps(altes_json)}\nNEW: {neue_info}"
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
@@ -158,68 +144,59 @@ st.title("🏗️ Logbook | Smart Bau-Tagebuch")
 
 selected_gewerk = st.selectbox("🔧 Wähle dein Gewerk:", list(GEWERKE_KONTEXT.keys()))
 
-if 'step' not in st.session_state:
-    st.session_state.step = 1
-if 'current_data' not in st.session_state:
-    st.session_state.current_data = None
+if 'step' not in st.session_state: st.session_state.step = 1
+if 'current_data' not in st.session_state: st.session_state.current_data = None
 
-audio = audiorecorder("🎙️ Aufnahme starten", "⏹️ Stop")
+audio = audiorecorder("🎙️ Aufnahme starten", "⏹️ Stop", key="main_recorder")
 
-# Audio Verarbeitung
 if len(audio) > 0 and st.session_state.step == 1:
-    with st.spinner(f"Verarbeite für {selected_gewerk}..."):
+    with st.spinner("Analyse läuft..."):
         text = process_audio(audio.export().read(), selected_gewerk)
         st.info(f"📝 Erkannt: {text}")
         st.session_state.current_data = analyze_text(text, selected_gewerk)
         st.session_state.step = 2
+        st.rerun()
 
-# Ergebnis Anzeige
 if st.session_state.step >= 2 and st.session_state.current_data:
     data = st.session_state.current_data
     log = data.get("logbuch_eintrag", {})
     
-    if log:
-        st.subheader("✅ Vorschau Tagebuch")
-        with st.container(border=True):
-            st.write(f"**Tätigkeit:** {log.get('taetigkeit', '-')}")
-            st.metric("Zeit", f"{log.get('arbeitszeit', 0)} Std")
-            if log.get("material_verbraucht"):
-                st.write("**Material:**")
-                for mat in log.get("material_verbraucht"):
-                    # Nutze .get() mit Fallback, damit es nie wieder crasht
-                    m = mat.get('menge', '?')
-                    e = mat.get('einheit', '')
-                    a = mat.get('artikel', 'Unbekanntes Material')
-                    st.text(f"• {m} {e} {a}")
+    # Vorschau
+    st.subheader("✅ Vorschau Tagebuch")
+    with st.container(border=True):
+        st.write(f"**Tätigkeit:** {log.get('taetigkeit', '-')}")
+        st.metric("Zeit", f"{log.get('arbeitszeit', 0)} Std")
+        if log.get("material_verbraucht"):
+            for mat in log.get("material_verbraucht"):
+                st.text(f"• {mat.get('menge', '?')} {mat.get('einheit', '')} {mat.get('artikel', 'Material')}")
 
+    # Bestellung
     bestellung = data.get("material_bestellung", {})
-    if bestellung.get("hat_bestellung"):
+    if bestellung.get("hat_bestellung") or bestellung.get("items"):
         st.divider()
-        st.subheader("📦 Bestellung erkannt")
-        with st.warning("Materialliste", icon="🚛"):
-            st.dataframe(bestellung.get("items"), hide_index=True)
+        st.subheader("📦 Bestellung")
+        st.dataframe(bestellung.get("items", []), hide_index=True)
 
+    # Rückfrage
     if data.get("status") == "RUECKFRAGE_NOETIG":
-        st.divider()
         st.warning(f"🤔 **KI-Rückfrage:** {data.get('fehlende_infos')}")
-        audio_antwort = audiorecorder("🎙️ Antwort einsprechen", "⏹️ Absenden", key="answer_rec")
-        if len(audio_antwort) > 0:
-            with st.spinner("Ergänze Daten..."):
-                antwort_text = process_audio(audio_antwort.export().read(), selected_gewerk)
-                st.session_state.current_data = update_entry(data, antwort_text)
+        audio_reply = audiorecorder("🎙️ Antwort einsprechen", "⏹️ Absenden", key="reply_recorder")
+        if len(audio_reply) > 0:
+            with st.spinner("Daten werden ergänzt..."):
+                reply_text = process_audio(audio_reply.export().read(), selected_gewerk)
+                st.session_state.current_data = update_entry(data, reply_text)
                 st.rerun()
 
+    # Footer Buttons
     st.divider()
     col_save, col_reset = st.columns(2)
-    
     with col_save:
         if st.button("💾 In Google Sheets speichern", type="primary"):
             if save_to_google_sheets(log, selected_gewerk):
-                st.toast("In Google Sheets gespeichert!", icon="✅")
+                st.toast("Gespeichert!", icon="✅")
                 st.session_state.step = 1
                 st.session_state.current_data = None
                 st.rerun()
-
     with col_reset:
         if st.button("🔄 Verwerfen"):
             st.session_state.step = 1

@@ -132,17 +132,18 @@ def analyze_text(text, gewerk_name):
 
 def update_entry(altes_json, neue_info):
     system_prompt_update = """
-    ROLE: Data Merger.
-    TASK: Update the OLD JSON with NEW INFO.
+    ROLE: Precise Construction Data Merger.
+    TASK: Integrate NEW_INPUT into OLD_JSON without losing quantities or dimensions.
     
-    RULES:
-    1. Keep all existing data from OLD JSON.
-    2. Update specific fields (like diameter or quantity) with the NEW INFO.
-    3. Ensure 'material_verbraucht' is a list of objects with artikel, menge, einheit.
-    4. Set status to 'OK' only if taetigkeit, arbeitszeit, and material details are complete.
-    5. 'fehlende_infos' must be in the language of the NEW INFO.
+    STRICT RULES:
+    1. QUANTITY PRESERVATION: If OLD_JSON or NEW_INPUT mentions a number (e.g., '6 pieces', '3 meters'), it MUST appear in the 'menge' or 'artikel' field.
+    2. DETAIL MERGING: If the user adds a dimension (e.g., '16 Zoll'), append it to the 'artikel' name (e.g., 'Kupferrohr 16 Zoll').
+    3. NO DATA LOSS: Do not overwrite 6 pieces with 1 piece unless explicitly corrected.
+    4. TRANSLATION: Keep everything in GERMAN for the final JSON values.
     """
+    
     user_message = f"OLD_JSON: {json.dumps(altes_json)}\nNEW_INPUT: {neue_info}"
+    
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 

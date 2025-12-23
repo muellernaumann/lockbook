@@ -139,7 +139,7 @@ def save_to_csv(daten, gewerk):
 
 # --- 4. APP OBERFLÄCHE ---
 
-st.title("🏗️ Smart Bau-Tagebuch")
+st.title("🏗️ Logbook | Smart Bau-Tagebuch")
 
 selected_gewerk = st.selectbox("🔧 Wähle dein Gewerk:", list(GEWERKE_KONTEXT.keys()))
 st.write("Sprich deinen Bericht ein:")

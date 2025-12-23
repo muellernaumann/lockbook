@@ -55,14 +55,19 @@ GEWERKE_KONTEXT = {
 
 def save_to_google_sheets(daten, gewerk):
     try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets"]
+        # Erweiteter Scope für Schreibzugriff
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         gc = gspread.authorize(creds)
         
-        # Öffnet die Tabelle "Logbook" und das Blatt "Berichte"
+        # Den Namen der Tabelle exakt so wie im Screenshot (Groß/Kleinschreibung!)
         sheet = gc.open("Logbook").worksheet("Berichte")
-        
+                
         mat_liste = daten.get('material_verbraucht', [])
         mat_string = " | ".join([f"{m['menge']} {m['einheit']} {m['artikel']}" for m in mat_liste])
         

@@ -70,10 +70,16 @@ def analyze_text(text, gewerk_name):
     role_description = GEWERKE_KONTEXT[gewerk_name]["llama_role"]
     system_prompt = f"""
     {role_description}
+    
     DEINE AUFGABE (MULTI-INTENT):
-    Trenne strikt zwischen:
-    1. TAGEBUCH (Was wurde getan? Vergangenheit)
-    2. BESTELLUNG (Was wird gebraucht? Zukunft)
+    Trenne strikt zwischen TAGEBUCH (Vergangenheit) und BESTELLUNG (Zukunft).
+    
+    EXTREM WICHTIG - VALIDIERUNG:
+    Du bist ein STRENGER Bauleiter. Du akzeptierst keine unvollständigen Angaben!
+    Setze status auf "RUECKFRAGE_NOETIG", wenn:
+    1. TÄTIGKEIT: Wenn nur die Zeit genannt wird, aber nicht WAS gemacht wurde (z.B. "Habe 2 Stunden gebraucht" -> Ungültig! Frage: "Was hast du gemacht?").
+    2. MATERIAL: Wenn der Typ oder die Maße fehlen (z.B. "Brauche Rohre" -> Ungültig! Frage: "Welche Rohre? DN? Material?").
+    3. MENGE: Wenn vage Angaben gemacht werden (z.B. "ein paar", "bisschen" -> Ungültig! Frage: "Wie viele genau?").
     
     JSON STRUKTUR:
     {{
@@ -88,10 +94,10 @@ def analyze_text(text, gewerk_name):
             "items": [ {{ "artikel": "string", "menge": float, "einheit": "string" }} ]
         }},
         "status": "OK" | "RUECKFRAGE_NOETIG" | "IGNORED",
-        "fehlende_infos": "string"
+        "fehlende_infos": "string (Formuliere eine präzise Frage an den Handwerker)"
     }}
-    WICHTIG: "Brauche 5 Platten" -> kommt in Bestellung, NICHT in Verbrauch!
     """
+    
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", 
         response_format={ "type": "json_object" }, 
